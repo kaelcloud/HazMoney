@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>HazMoney</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="HazMoney">
+<meta name="theme-color" content="#0E4D3D">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<style>
+:root {
+  color-scheme: light;
+  --bg: #EDF1EE;
+  --surface: #FFFFFF;
+  --ink: #13201B;
+  --muted: #5D6B65;
+  --line: #DCE3DF;
+  --jade: #0E5E4A;
+  --income: #12804A;
+  --expense: #C23A2E;
+  --income-soft: #E1F2E7;
+  --expense-soft: #F8E3E0;
+  --icon-soft: #EEF2F0;
+  --bar: #C9D3CE;
+  --note-bg: #0E4D3D;
+  --note-ink: #F2F7F4;
+  --note-muted: #A9C7BB;
+  --note-line: rgba(242, 247, 244, 0.13);
+  --note-pos: #8FE3B0;
+  --note-neg: #FFB3A8;
+  --tabbar: rgba(255, 255, 255, 0.88);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #0D1513;
+    --surface: #16201D;
+    --ink: #E9F0EC;
+    --muted: #93A39C;
+    --line: #24302C;
+    --jade: #4FC3A1;
+    --income: #3DCB7F;
+    --expense: #FF7A6B;
+    --income-soft: #15301F;
+    --expense-soft: #3A1C18;
+    --icon-soft: #1E2A26;
+    --bar: #2E3B37;
+    --note-bg: #123F33;
+    --tabbar: rgba(22, 32, 29, 0.9);
+  }
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+  -webkit-tap-highlight-color: transparent;
+  min-height: 100vh;
+}
+
+main {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: calc(env(safe-area-inset-top, 0px) + 16px) 18px calc(env(safe-area-inset-bottom, 0px) + 96px);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.top { display: flex; justify-content: space-between; align-items: flex-end; padding: 4px 2px 6px; }
+.top h1 { font-size: 30px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; }
+.sub { color: var(--muted); font-size: 14px; }
+.pill {
+  font-size: 12px; font-weight: 600; color: var(--muted);
+  background: var(--icon-soft); border: 1px solid var(--line);
+  padding: 5px 10px; border-radius: 999px; white-space: nowrap;
+}
+
+/* The banknote: the one bold element */
+.note {
+  position: relative; overflow: hidden;
+  background: var(--note-bg); color: var(--note-ink);
+  border-radius: 26px; padding: 22px 22px 18px;
+}
+.rosette { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.rosette path { fill: none; stroke: var(--note-line); stroke-width: 1; }
+.note > *:not(.rosette) { position: relative; }
+.note-label { color: var(--note-muted); font-size: 14px; font-weight: 500; }
+.note-amount { margin-top: 6px; display: flex; align-items: baseline; gap: 6px; line-height: 1; }
+.note-amount .cur { font-size: 18px; font-weight: 600; color: var(--note-muted); }
+.note-amount .whole { font-size: 44px; font-weight: 700; letter-spacing: -0.03em; }
+.note-amount .cents { font-size: 22px; font-weight: 600; color: var(--note-muted); margin-left: -4px; }
+.note-foot {
+  margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--note-line);
+  display: flex; justify-content: space-between; align-items: center; font-size: 14px;
+}
+.note-foot span { color: var(--note-muted); }
+.note-foot strong { font-size: 16px; }
+.note-foot .pos { color: var(--note-pos); }
+.note-foot .neg { color: var(--note-neg); }
+
+.stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.stat {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 20px; padding: 14px 16px;
+}
+.stat-label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); font-weight: 500; }
+.arrow {
+  width: 26px; height: 26px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 14px; font-weight: 700;
+}
+.arrow.in { background: var(--income-soft); color: var(--income); }
+.arrow.out { background: var(--expense-soft); color: var(--expense); }
+.stat strong { display: block; margin-top: 10px; font-size: 19px; font-weight: 700; letter-spacing: -0.01em; }
+.stat strong.in { color: var(--income); }
+.stat strong.out { color: var(--expense); }
+
+.panel {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 20px; padding: 18px;
+}
+.panel h2 { font-size: 17px; font-weight: 700; }
+.panel-head { display: flex; justify-content: space-between; align-items: baseline; }
+.panel-head a { color: var(--jade); font-size: 14px; font-weight: 600; text-decoration: none; }
+
+.chart {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  height: 180px; margin-top: 18px; gap: 6px;
+}
+.col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+.col .val { font-size: 11px; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
+.col .bar { width: 100%; max-width: 30px; border-radius: 8px; background: var(--bar); }
+.col .mon { font-size: 12px; font-weight: 600; color: var(--muted); margin-top: 8px; }
+.col.now .val { color: var(--expense); }
+.col.now .bar { background: var(--expense); }
+.col.now .mon { color: var(--ink); }
+
+.txlist { list-style: none; margin-top: 6px; }
+.tx { display: flex; align-items: center; gap: 12px; padding: 12px 0; }
+.tx + .tx { border-top: 1px solid var(--line); }
+.tx-icon {
+  width: 42px; height: 42px; flex: none; border-radius: 14px;
+  background: var(--icon-soft); display: grid; place-items: center; font-size: 20px;
+}
+.tx-icon.in { background: var(--income-soft); }
+.tx-main { flex: 1; min-width: 0; }
+.tx-desc { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tx-cat { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 12px; color: var(--muted); min-width: 0; }
+.tx-cat .label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tag {
+  flex: none; font-size: 11px; font-weight: 600; padding: 1px 7px;
+  border-radius: 6px; border: 1px solid var(--line); color: var(--muted);
+}
+.tx-side { text-align: right; flex: none; }
+.tx-amt { font-size: 15px; font-weight: 700; }
+.tx-amt.in { color: var(--income); }
+.tx-amt.out { color: var(--expense); }
+.tx-date { font-size: 12px; color: var(--muted); margin-top: 3px; }
+
+.placeholder { text-align: center; padding: 34px 22px; }
+.placeholder .big { font-size: 36px; }
+.placeholder p { color: var(--muted); margin-top: 10px; font-size: 15px; max-width: 34ch; margin-inline: auto; }
+
+/* Bottom tab bar, sized for one-handed thumb reach */
+.tabbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+  background: var(--tabbar);
+  -webkit-backdrop-filter: saturate(180%) blur(18px); backdrop-filter: saturate(180%) blur(18px);
+  border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.tabbar nav { max-width: 560px; margin: 0 auto; display: grid; grid-template-columns: repeat(5, 1fr); }
+.tabbar a {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 9px 0 7px; min-height: 56px;
+  color: var(--muted); text-decoration: none; font-size: 10.5px; font-weight: 600;
+}
+.tabbar a[aria-current="page"] { color: var(--jade); }
+.tabbar svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.tabbar a:focus-visible, .panel-head a:focus-visible { outline: 2px solid var(--jade); outline-offset: 2px; border-radius: 8px; }
+</style>
+</head>
+<body>
+<main id="app"></main>
+
+<div class="tabbar">
+  <nav aria-label="Main">
+    <a href="#home" data-tab="home"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg>Home</a>
+    <a href="#transactions" data-tab="transactions"><svg viewBox="0 0 24 24"><path d="M7 20V4M3 8l4-4 4 4M17 4v16M13 16l4 4 4-4"/></svg>Transactions</a>
+    <a href="#budget" data-tab="budget"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="14" rx="3"/><path d="M3 10h18M15.5 15h2.5"/></svg>Budget</a>
+    <a href="#reports" data-tab="reports"><svg viewBox="0 0 24 24"><path d="M3 21h18M6 17v-5M11 17V5M16 17V9"/></svg>Reports</a>
+    <a href="#settings" data-tab="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.9 4.9 7 7M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>Settings</a>
+  </nav>
+</div>
+
+<script>
+'use strict';
+
+/* ---------- Constants ---------- */
+// Money is stored as whole sen (RM 1.00 = 100) to avoid rounding errors.
+const CATEGORIES = {
+  food:          { label: 'Food & Drinks',           icon: '🍜' },
+  transport:     { label: 'Petrol & Transportation', icon: '⛽' },
+  groceries:     { label: 'Groceries',               icon: '🛒' },
+  bills:         { label: 'Bills & Utilities',       icon: '💡' },
+  shopping:      { label: 'Shopping',                icon: '🛍️' },
+  family:        { label: 'Family',                  icon: '👨‍👩‍👧' },
+  health:        { label: 'Health & Fitness',        icon: '💪' },
+  entertainment: { label: 'Entertainment',           icon: '🎬' },
+  salary:        { label: 'Salary',                  icon: '💼' },
+  other:         { label: 'Other',                   icon: '📦' },
+};
+const PAYMENT_METHODS = { maybank: 'Maybank', tng: 'Touch ’n Go', cash: 'Cash', other: 'Other' };
+const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const MONTHS_LONG = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+/* ---------- Formatting ---------- */
+function splitRM(amountSen) {
+  const abs = Math.abs(Math.round(amountSen));
+  const whole = Math.floor(abs / 100).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const cents = (abs % 100).toString().padStart(2, '0');
+  return { negative: amountSen < 0, whole, cents };
+}
+function formatRM(amountSen) {
+  const p = splitRM(amountSen);
+  return `${p.negative ? '−' : ''}RM ${p.whole}.${p.cents}`;
+}
+function formatSignedRM(amountSen, type) {
+  return `${type === 'income' ? '+' : '−'}${formatRM(Math.abs(amountSen))}`;
+}
+function formatCompact(amountSen) {
+  const rm = amountSen / 100;
+  return rm >= 1000 ? `${(rm / 1000).toFixed(1)}k` : `${Math.round(rm)}`;
+}
+function toISODate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function formatDate(iso) { const [y, m, d] = iso.split('-'); return `${d}/${m}/${y}`; }
+function monthKeyOf(iso) { return iso.slice(0, 7); }
+function monthKeyFromDate(d) { return toISODate(d).slice(0, 7); }
+function monthLong(key) { return `${MONTHS_LONG[Number(key.slice(5, 7)) - 1]} ${key.slice(0, 4)}`; }
+function monthShort(key) { return MONTHS_SHORT[Number(key.slice(5, 7)) - 1]; }
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+/* ---------- Calculations ---------- */
+function getMonthlySummary(txs, key) {
+  let incomeSen = 0, expensesSen = 0;
+  for (const t of txs) {
+    if (monthKeyOf(t.date) !== key) continue;
+    if (t.type === 'income') incomeSen += t.amountSen; else expensesSen += t.amountSen;
+  }
+  return { incomeSen, expensesSen, savingsSen: incomeSen - expensesSen };
+}
+function getAvailableBalance(openingSen, txs) {
+  return txs.reduce((acc, t) => t.type === 'income' ? acc + t.amountSen : acc - t.amountSen, openingSen);
+}
+function getRecent(txs, limit) {
+  return [...txs].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)).slice(0, limit);
+}
+function getMonthlyExpenseSeries(txs, months, today) {
+  const series = [];
+  for (let i = months - 1; i >= 0; i--) {
+    const key = monthKeyFromDate(new Date(today.getFullYear(), today.getMonth() - i, 1));
+    series.push({ key, label: monthShort(key), totalSen: 0 });
+  }
+  const index = new Map(series.map((p, i) => [p.key, i]));
+  for (const t of txs) {
+    if (t.type !== 'expense') continue;
+    const i = index.get(monthKeyOf(t.date));
+    if (i !== undefined) series[i].totalSen += t.amountSen;
+  }
+  return series;
+}
+
+/* ---------- Sample data (shown until real data is added) ---------- */
+const SAMPLE_OPENING_BALANCE_SEN = 820000; // RM 8,200.00
+const TEMPLATE = [
+  { day: 1,  type: 'income',  amountSen: 450000, description: 'Monthly salary',            category: 'salary',        paymentMethod: 'maybank', fixed: true },
+  { day: 2,  type: 'expense', amountSen: 14280,  description: 'TNB electricity bill',      category: 'bills',         paymentMethod: 'maybank' },
+  { day: 3,  type: 'expense', amountSen: 6000,   description: 'Petronas petrol',           category: 'transport',     paymentMethod: 'tng' },
+  { day: 5,  type: 'expense', amountSen: 18750,  description: 'Lotus’s groceries',         category: 'groceries',     paymentMethod: 'maybank' },
+  { day: 7,  type: 'expense', amountSen: 1250,   description: 'Nasi lemak & teh tarik',    category: 'food',          paymentMethod: 'cash' },
+  { day: 8,  type: 'expense', amountSen: 12900,  description: 'Unifi home internet',       category: 'bills',         paymentMethod: 'maybank', fixed: true },
+  { day: 10, type: 'expense', amountSen: 50000,  description: 'Monthly money for parents', category: 'family',        paymentMethod: 'maybank', fixed: true },
+  { day: 12, type: 'expense', amountSen: 15000,  description: 'Gym membership',            category: 'health',        paymentMethod: 'maybank', fixed: true },
+  { day: 14, type: 'expense', amountSen: 8990,   description: 'Shopee order',              category: 'shopping',      paymentMethod: 'tng' },
+  { day: 16, type: 'expense', amountSen: 2380,   description: 'Mamak dinner with friends', category: 'food',          paymentMethod: 'tng' },
+  { day: 18, type: 'expense', amountSen: 5500,   description: 'Shell petrol',              category: 'transport',     paymentMethod: 'tng' },
+  { day: 20, type: 'expense', amountSen: 3200,   description: 'GSC movie tickets',         category: 'entertainment', paymentMethod: 'tng' },
+  { day: 22, type: 'income',  amountSen: 80000,  description: 'Freelance design work',     category: 'other',         paymentMethod: 'maybank', fixed: true, everyOtherMonth: true },
+  { day: 24, type: 'expense', amountSen: 1850,   description: 'Grab ride',                 category: 'transport',     paymentMethod: 'tng' },
+  { day: 26, type: 'expense', amountSen: 9640,   description: 'Mydin groceries',           category: 'groceries',     paymentMethod: 'cash' },
+  { day: 28, type: 'expense', amountSen: 1590,   description: 'Kopitiam lunch',            category: 'food',          paymentMethod: 'cash' },
+];
+const VARIATION = [1, 0.94, 1.07, 0.9, 1.12, 0.97];
+
+function buildSampleTransactions(today) {
+  const out = [];
+  for (let monthsAgo = 0; monthsAgo < 6; monthsAgo++) {
+    TEMPLATE.forEach((tpl, i) => {
+      if (tpl.everyOtherMonth && monthsAgo % 2 === 1) return;
+      const date = new Date(today.getFullYear(), today.getMonth() - monthsAgo, tpl.day);
+      if (date > today) return; // never create future transactions
+      const amountSen = tpl.fixed ? tpl.amountSen : Math.round(tpl.amountSen * VARIATION[monthsAgo]);
+      out.push({
+        id: `sample-${monthsAgo}-${String(i).padStart(2, '0')}`,
+        type: tpl.type, amountSen, description: tpl.description,
+        category: tpl.category, paymentMethod: tpl.paymentMethod, date: toISODate(date),
+      });
+    });
+  }
+  return out;
+}
+
+const state = {
+  isSample: true,
+  openingBalanceSen: SAMPLE_OPENING_BALANCE_SEN,
+  transactions: buildSampleTransactions(new Date()),
+};
+
+/* ---------- Banknote background pattern ---------- */
+function rosettePaths() {
+  const cx = 300, cy = 40;
+  let out = '';
+  for (let ring = 0; ring < 9; ring++) {
+    const R = 50 + ring * 20, k = 16, a = 5;
+    let d = '';
+    for (let i = 0; i <= 360; i += 2) {
+      const t = (i * Math.PI) / 180;
+      const r = R + a * Math.sin(k * t + ring * 0.9);
+      d += `${i ? 'L' : 'M'}${(cx + r * Math.cos(t)).toFixed(1)} ${(cy + r * Math.sin(t)).toFixed(1)}`;
+    }
+    out += `<path d="${d}Z"/>`;
+  }
+  return out;
+}
+const ROSETTE = rosettePaths();
+
+/* ---------- Views ---------- */
+function txRow(t) {
+  const cat = CATEGORIES[t.category];
+  const dir = t.type === 'income' ? 'in' : 'out';
+  return `<li class="tx">
+    <div class="tx-icon ${t.type === 'income' ? 'in' : ''}" aria-hidden="true">${cat.icon}</div>
+    <div class="tx-main">
+      <div class="tx-desc">${escapeHtml(t.description)}</div>
+      <div class="tx-cat"><span class="label">${cat.label}</span><span class="tag">${PAYMENT_METHODS[t.paymentMethod]}</span></div>
+    </div>
+    <div class="tx-side">
+      <div class="tx-amt ${dir}">${formatSignedRM(t.amountSen, t.type)}</div>
+      <div class="tx-date">${formatDate(t.date)}</div>
+    </div>
+  </li>`;
+}
+
+function renderHome() {
+  const today = new Date();
+  const key = monthKeyFromDate(today);
+  const txs = state.transactions;
+  const s = getMonthlySummary(txs, key);
+  const bal = splitRM(getAvailableBalance(state.openingBalanceSen, txs));
+  const series = getMonthlyExpenseSeries(txs, 6, today);
+  const max = Math.max(...series.map(p => p.totalSen), 1);
+  const savingsPos = s.savingsSen >= 0;
+
+  const bars = series.map((p, i) => {
+    const h = Math.max(4, Math.round((p.totalSen / max) * 130));
+    return `<div class="col ${i === series.length - 1 ? 'now' : ''}">
+      <span class="val">${formatCompact(p.totalSen)}</span>
+      <div class="bar" style="height:${h}px"></div>
+      <span class="mon">${p.label}</span>
+    </div>`;
+  }).join('');
+
+  return `
+    <header class="top">
+      <div><h1>HazMoney</h1><p class="sub">${monthLong(key)}</p></div>
+      ${state.isSample ? '<span class="pill">Sample data</span>' : ''}
+    </header>
+
+    <section class="note" aria-label="Total available balance">
+      <svg class="rosette" viewBox="0 0 360 200" preserveAspectRatio="xMaxYMin slice" aria-hidden="true">${ROSETTE}</svg>
+      <p class="note-label">Total available balance</p>
+      <p class="note-amount"><span class="cur">RM</span><span class="whole">${bal.negative ? '−' : ''}${bal.whole}</span><span class="cents">.${bal.cents}</span></p>
+      <div class="note-foot">
+        <span>Saved this month</span>
+        <strong class="${savingsPos ? 'pos' : 'neg'}">${savingsPos ? '+' : ''}${formatRM(s.savingsSen)}</strong>
+      </div>
+    </section>
+
+    <div class="stats">
+      <div class="stat">
+        <span class="stat-label"><span class="arrow in" aria-hidden="true">↓</span>Income</span>
+        <strong class="in">${formatRM(s.incomeSen)}</strong>
+      </div>
+      <div class="stat">
+        <span class="stat-label"><span class="arrow out" aria-hidden="true">↑</span>Expenses</span>
+        <strong class="out">${formatRM(s.expensesSen)}</strong>
+      </div>
+    </div>
+
+    <section class="panel">
+      <h2>Monthly spending</h2>
+      <p class="sub">Last 6 months, in RM</p>
+      <div class="chart" role="img" aria-label="Spending per month for the last 6 months">${bars}</div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Recent transactions</h2><a href="#transactions">See all</a></div>
+      <ul class="txlist">${getRecent(txs, 6).map(txRow).join('')}</ul>
+    </section>`;
+}
+
+function renderPlaceholder(title, icon, message) {
+  return `
+    <header class="top"><div><h1>${title}</h1></div></header>
+    <section class="panel placeholder">
+      <div class="big" aria-hidden="true">${icon}</div>
+      <p>${message}</p>
+    </section>`;
+}
+
+const VIEWS = {
+  home: renderHome,
+  transactions: () => renderPlaceholder('Transactions', '↕️', 'Add, edit and delete income and expenses. Coming in a later milestone.'),
+  budget: () => renderPlaceholder('Budget', '👛', 'Monthly and per-category budgets with warnings. Coming in a later milestone.'),
+  reports: () => renderPlaceholder('Reports', '📊', 'Daily, weekly and monthly reports by category. Coming in a later milestone.'),
+  settings: () => renderPlaceholder('Settings', '⚙️', 'Backups, CSV import and preferences. Coming in a later milestone.'),
+};
+
+/* ---------- Router ---------- */
+function route() {
+  const tab = (location.hash || '#home').slice(1);
+  const view = VIEWS[tab] ? tab : 'home';
+  document.getElementById('app').innerHTML = VIEWS[view]();
+  document.querySelectorAll('.tabbar a').forEach(a => {
+    if (a.dataset.tab === view) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  });
+  window.scrollTo(0, 0);
+}
+window.addEventListener('hashchange', route);
+route();
+
+/* ---------- Offline support ---------- */
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js').catch(() => {});
+}
+</script>
+</body>
+</html>
