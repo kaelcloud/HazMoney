@@ -110,7 +110,12 @@ body.no-tabs main { padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 32px
 .note-amount .cur { font-size: 18px; font-weight: 600; color: var(--note-muted); }
 .note-amount .whole { font-size: 44px; font-weight: 700; letter-spacing: -0.03em; }
 .note-amount .cents { font-size: 22px; font-weight: 600; color: var(--note-muted); margin-left: -4px; }
-.note-foot { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--note-line); display: flex; justify-content: space-between; align-items: center; font-size: 14px; }
+.note-accounts { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 8px; margin-top: 18px; }
+.note-accounts div { min-width: 0; }
+.note-accounts span { display: block; font-size: 12px; color: var(--note-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.note-accounts strong { display: block; font-size: 15px; font-weight: 700; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.note-accounts strong.neg { color: var(--note-neg); }
+.note-foot { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--note-line); display: flex; justify-content: space-between; align-items: center; font-size: 14px; }
 .note-foot span { color: var(--note-muted); }
 .note-foot strong { font-size: 16px; }
 .note-foot .pos { color: var(--note-pos); }
@@ -228,9 +233,15 @@ body.no-tabs .tabbar { display: none; }
 .amount-wrap input { flex: 1; min-width: 0; border: 0; background: transparent; font-size: 34px; font-weight: 700; letter-spacing: -0.02em; padding: 4px 0; outline: none; }
 .amount-wrap.in input { color: var(--income); }
 .amount-wrap.out input { color: var(--expense); }
+.amount-wrap.tr input { color: var(--ink); }
+.amount-wrap.small input { font-size: 22px; }
+.amount-wrap.small .cur { font-size: 16px; }
+[hidden] { display: none !important; }
+.sheet > .field, .sheet > #transferFields { margin-top: 16px; }
+#transferFields .field + .field { margin-top: 16px; }
 
 .seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; background: var(--field); border: 1px solid var(--line); padding: 4px; border-radius: 14px; }
-.seg button { min-height: 42px; border-radius: 10px; font-size: 14px; font-weight: 600; color: var(--muted); }
+.seg button { min-height: 42px; padding: 0 4px; border-radius: 10px; font-size: 14px; font-weight: 600; color: var(--muted); }
 .seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
 .type-seg button[data-type="expense"][aria-pressed="true"] { color: var(--expense); }
 .type-seg button[data-type="income"][aria-pressed="true"] { color: var(--income); }
@@ -329,7 +340,7 @@ body.no-tabs .tabbar { display: none; }
    Money is stored as whole sen (RM 1.00 = 100).
    ========================================================= */
 const STORAGE_KEY = 'hazmoney:data';
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const MAX_TX_SEN = 100000000;        // RM 1,000,000.00 per transaction
 const MAX_BALANCE_SEN = 1000000000;  // RM 10,000,000.00
 const MAX_DESC = 80;
@@ -351,6 +362,10 @@ const CATEGORIES = {
   other:         { label: 'Other',                   icon: '📦' },
 };
 const PAYMENT_METHODS = { maybank: 'Maybank', tng: 'Touch ’n Go', cash: 'Cash', other: 'Other' };
+// The three places your money is kept. "Other" only appears if older data uses it.
+const MAIN_ACCOUNTS = ['maybank', 'tng', 'cash'];
+const ACCOUNT_LABELS = { maybank: 'Maybank', tng: 'TNG eWallet', cash: 'Cash', other: 'Other' };
+const TX_TYPES = ['expense', 'income', 'transfer'];
 
 // Keyword rules for automatic categorisation (runs on the phone, no AI or API).
 // When several keywords match, the longest one wins ("grab food" beats "grab").
@@ -411,6 +426,10 @@ function formatCompact(amountSen) {
   const rm = amountSen / 100;
   return rm >= 1000 ? `${(rm / 1000).toFixed(1)}k` : `${Math.round(rm)}`;
 }
+function formatPlain(amountSen) {
+  const p = splitRM(amountSen);
+  return `${p.negative ? '−' : ''}${p.whole}.${p.cents}`;
+}
 function senToInput(sen) {
   return `${Math.floor(sen / 100)}.${String(sen % 100).padStart(2, '0')}`;
 }
@@ -457,26 +476,45 @@ function isIsoTimestamp(s) { return typeof s === 'string' && s.length < 40 && !N
 // Checks what the user typed in the transaction form.
 function validateForm(draft) {
   const errors = {};
+  const type = TX_TYPES.includes(draft.type) ? draft.type : 'expense';
   const amountSen = parseAmountToSen(draft.amountText);
   if (String(draft.amountText).trim() === '') errors.amount = 'Enter an amount.';
   else if (amountSen === null) errors.amount = 'Enter an amount like 12.50, with up to 2 decimal places.';
   else if (amountSen <= 0) errors.amount = 'The amount must be more than RM 0.00.';
   else if (amountSen > MAX_TX_SEN) errors.amount = 'That amount is over RM 1,000,000. Check for an extra zero.';
 
-  const description = String(draft.description).trim().replace(/\s+/g, ' ');
+  const paymentMethod = has(PAYMENT_METHODS, draft.paymentMethod) ? draft.paymentMethod : 'maybank';
+  let toMethod = null;
+  if (type === 'transfer') {
+    if (!has(PAYMENT_METHODS, draft.toMethod)) errors.toMethod = 'Choose where the money goes.';
+    else if (draft.toMethod === paymentMethod) errors.toMethod = 'Choose two different accounts.';
+    else toMethod = draft.toMethod;
+  }
+
+  let description = String(draft.description).trim().replace(/\s+/g, ' ');
+  if (!description && type === 'transfer' && toMethod) {
+    const names = {
+      'maybank>tng': 'Top up Touch ’n Go', 'cash>tng': 'Top up Touch ’n Go',
+      'maybank>cash': 'ATM withdrawal', 'cash>maybank': 'Cash deposit',
+      'tng>maybank': 'Transfer out of Touch ’n Go',
+    };
+    description = names[`${paymentMethod}>${toMethod}`] || `${ACCOUNT_LABELS[paymentMethod]} to ${ACCOUNT_LABELS[toMethod]}`;
+  }
   if (!description) errors.description = 'Add a short description, like “Petronas petrol”.';
   else if (description.length > MAX_DESC) errors.description = `Keep the description under ${MAX_DESC} characters.`;
 
   if (!isValidISODate(draft.date)) errors.date = 'Choose a date.';
   else if (draft.date > todayISO()) errors.date = 'The date can’t be in the future.';
 
-  if (!has(CATEGORIES, draft.category)) errors.category = 'Choose a category.';
-  const type = draft.type === 'income' ? 'income' : 'expense';
-  const paymentMethod = has(PAYMENT_METHODS, draft.paymentMethod) ? draft.paymentMethod : 'other';
+  if (type !== 'transfer' && !has(CATEGORIES, draft.category)) errors.category = 'Choose a category.';
 
   return {
     errors,
-    value: { type, amountSen, description, category: draft.category, paymentMethod, date: draft.date },
+    value: {
+      type, amountSen, description,
+      category: type === 'transfer' ? 'other' : draft.category,
+      paymentMethod, toMethod, date: draft.date,
+    },
   };
 }
 
@@ -484,16 +522,22 @@ function validateForm(draft) {
 function cleanTx(t) {
   if (!t || typeof t !== 'object') return null;
   if (typeof t.id !== 'string' || !t.id || t.id.length > 64) return null;
-  if (t.type !== 'income' && t.type !== 'expense') return null;
+  if (!TX_TYPES.includes(t.type)) return null;
   if (!Number.isInteger(t.amountSen) || t.amountSen <= 0 || t.amountSen > MAX_TX_SEN) return null;
   if (typeof t.description !== 'string') return null;
   const description = t.description.trim();
   if (!description || description.length > MAX_DESC) return null;
   if (!has(CATEGORIES, t.category) || !has(PAYMENT_METHODS, t.paymentMethod)) return null;
+  let toMethod = null;
+  if (t.type === 'transfer') {
+    if (!has(PAYMENT_METHODS, t.toMethod) || t.toMethod === t.paymentMethod) return null;
+    toMethod = t.toMethod;
+  }
   if (!isValidISODate(t.date)) return null;
   return {
     id: t.id, type: t.type, amountSen: t.amountSen, description,
-    category: t.category, paymentMethod: t.paymentMethod, date: t.date,
+    category: t.type === 'transfer' ? 'other' : t.category,
+    paymentMethod: t.paymentMethod, toMethod, date: t.date,
     createdAt: isIsoTimestamp(t.createdAt) ? t.createdAt : null,
     updatedAt: isIsoTimestamp(t.updatedAt) ? t.updatedAt : null,
   };
@@ -503,7 +547,28 @@ function cleanTx(t) {
 function cleanData(d) {
   if (!d || typeof d !== 'object') return null;
   if (!Number.isInteger(d.schemaVersion) || d.schemaVersion < 1 || d.schemaVersion > SCHEMA_VERSION) return null;
-  if (!Number.isInteger(d.openingBalanceSen) || Math.abs(d.openingBalanceSen) > MAX_BALANCE_SEN) return null;
+  const okAmount = v => Number.isInteger(v) && Math.abs(v) <= MAX_BALANCE_SEN;
+
+  // Version 1 had one combined opening balance. It moves into Maybank,
+  // and the app asks you to split it across your accounts.
+  let openingBalances;
+  let openingNeedsReview = false;
+  if (d.schemaVersion === 1) {
+    if (!okAmount(d.openingBalanceSen)) return null;
+    openingBalances = { maybank: d.openingBalanceSen, tng: 0, cash: 0, other: 0 };
+    openingNeedsReview = true;
+  } else {
+    const ob = d.openingBalances;
+    if (!ob || typeof ob !== 'object') return null;
+    openingBalances = {};
+    for (const k of Object.keys(PAYMENT_METHODS)) {
+      const v = ob[k] === undefined ? 0 : ob[k];
+      if (!okAmount(v)) return null;
+      openingBalances[k] = v;
+    }
+    openingNeedsReview = d.openingNeedsReview === true;
+  }
+
   if (!Array.isArray(d.transactions) || d.transactions.length > MAX_TX_COUNT) return null;
   const ids = new Set();
   const transactions = [];
@@ -522,7 +587,8 @@ function cleanData(d) {
   const lastMethod = d.prefs && has(PAYMENT_METHODS, d.prefs.lastMethod) ? d.prefs.lastMethod : 'maybank';
   return {
     schemaVersion: SCHEMA_VERSION,
-    openingBalanceSen: d.openingBalanceSen,
+    openingBalances,
+    openingNeedsReview,
     transactions,
     learnedCategories,
     prefs: { lastMethod },
@@ -564,10 +630,12 @@ function commit(mutator, { isChange = true } = {}) {
   app.data = next;
   return true;
 }
-function newData(openingBalanceSen) {
+function newData(openingBalances) {
   return {
-    schemaVersion: SCHEMA_VERSION, openingBalanceSen, transactions: [],
-    learnedCategories: {}, prefs: { lastMethod: 'maybank' },
+    schemaVersion: SCHEMA_VERSION,
+    openingBalances: { maybank: 0, tng: 0, cash: 0, other: 0, ...openingBalances },
+    openingNeedsReview: false,
+    transactions: [], learnedCategories: {}, prefs: { lastMethod: 'maybank' },
     lastBackupAt: null, lastChangeAt: new Date().toISOString(), importedKeys: [],
   };
 }
@@ -583,12 +651,35 @@ function getMonthlySummary(txs, key) {
   let incomeSen = 0, expensesSen = 0;
   for (const t of txs) {
     if (monthKeyOf(t.date) !== key) continue;
-    if (t.type === 'income') incomeSen += t.amountSen; else expensesSen += t.amountSen;
+    if (t.type === 'income') incomeSen += t.amountSen;
+    else if (t.type === 'expense') expensesSen += t.amountSen;
+    // Transfers move money between your own accounts, so they're not income or spending.
   }
   return { incomeSen, expensesSen, savingsSen: incomeSen - expensesSen };
 }
-function getAvailableBalance(openingSen, txs) {
-  return txs.reduce((acc, t) => t.type === 'income' ? acc + t.amountSen : acc - t.amountSen, openingSen);
+function getAccountBalances(openings, txs) {
+  const b = {};
+  for (const k of Object.keys(PAYMENT_METHODS)) b[k] = openings[k] || 0;
+  for (const t of txs) {
+    if (t.type === 'income') b[t.paymentMethod] += t.amountSen;
+    else if (t.type === 'expense') b[t.paymentMethod] -= t.amountSen;
+    else { b[t.paymentMethod] -= t.amountSen; b[t.toMethod] += t.amountSen; }
+  }
+  return b;
+}
+function sumBalances(b) { return Object.values(b).reduce((acc, v) => acc + v, 0); }
+// Accounts to show: the main three, plus "Other" only if it holds money.
+function visibleAccounts(balances) {
+  return balances.other ? [...MAIN_ACCOUNTS, 'other'] : MAIN_ACCOUNTS;
+}
+function txTouchesAccount(t, acc) { return t.paymentMethod === acc || t.toMethod === acc; }
+// What a transaction does to one account's balance.
+function txEffectOn(t, acc) {
+  if (t.type === 'income') return t.paymentMethod === acc ? t.amountSen : 0;
+  if (t.type === 'expense') return t.paymentMethod === acc ? -t.amountSen : 0;
+  if (t.paymentMethod === acc) return -t.amountSen;
+  if (t.toMethod === acc) return t.amountSen;
+  return 0;
 }
 function getMonthlyExpenseSeries(txs, months, today) {
   const series = [];
@@ -630,6 +721,8 @@ function suggestCategory(description, type) {
    ========================================================= */
 const SAMPLE_TEMPLATE = [
   { day: 1,  type: 'income',  amountSen: 450000, description: 'Monthly salary',            category: 'salary',        paymentMethod: 'maybank', fixed: true },
+  { day: 1,  type: 'transfer', amountSen: 30000, description: 'Top up Touch ’n Go',       category: 'other',         paymentMethod: 'maybank', toMethod: 'tng', fixed: true },
+  { day: 4,  type: 'transfer', amountSen: 15000, description: 'ATM withdrawal',           category: 'other',         paymentMethod: 'maybank', toMethod: 'cash', fixed: true },
   { day: 2,  type: 'expense', amountSen: 14280,  description: 'TNB electricity bill',      category: 'bills',         paymentMethod: 'maybank' },
   { day: 3,  type: 'expense', amountSen: 6000,   description: 'Petronas petrol',           category: 'transport',     paymentMethod: 'tng' },
   { day: 5,  type: 'expense', amountSen: 18750,  description: 'Lotus’s groceries',         category: 'groceries',     paymentMethod: 'maybank' },
@@ -659,11 +752,11 @@ function buildSampleData(today) {
         type: tpl.type,
         amountSen: tpl.fixed ? tpl.amountSen : Math.round(tpl.amountSen * SAMPLE_VARIATION[monthsAgo]),
         description: tpl.description, category: tpl.category, paymentMethod: tpl.paymentMethod,
-        date: toISODate(date), createdAt: null,
+        toMethod: tpl.toMethod || null, date: toISODate(date), createdAt: null,
       });
     });
   }
-  return { openingBalanceSen: 820000, transactions };
+  return { openingBalances: { maybank: 760000, tng: 2500, cash: 3500, other: 0 }, transactions };
 }
 
 /* =========================================================
@@ -674,6 +767,7 @@ const app = {
   data: null,           // saved data when mode is 'live'
   sample: null,
   txMonth: monthKeyFromDate(new Date()),
+  txAccount: 'all',
   sheet: null,
 };
 function currentTxs() {
@@ -682,9 +776,9 @@ function currentTxs() {
   return [];
 }
 function currentOpening() {
-  if (app.mode === 'live') return app.data.openingBalanceSen;
-  if (app.mode === 'sample') return app.sample.openingBalanceSen;
-  return 0;
+  if (app.mode === 'live') return app.data.openingBalances;
+  if (app.mode === 'sample') return app.sample.openingBalances;
+  return { maybank: 0, tng: 0, cash: 0, other: 0 };
 }
 function needsBackup() {
   const d = app.data;
@@ -715,16 +809,24 @@ function rosettePaths() {
 const ROSETTE = rosettePaths();
 
 function txRow(t, { showDate = true } = {}) {
-  const cat = CATEGORIES[t.category];
+  const isTransfer = t.type === 'transfer';
   const isIncome = t.type === 'income';
+  const cat = CATEGORIES[t.category];
+  const icon = isTransfer ? '🔁' : cat.icon;
+  const label = isTransfer ? 'Transfer' : cat.label;
+  const tag = isTransfer
+    ? `${ACCOUNT_LABELS[t.paymentMethod]} → ${ACCOUNT_LABELS[t.toMethod]}`
+    : PAYMENT_METHODS[t.paymentMethod];
+  const amount = isTransfer ? formatRM(t.amountSen) : formatSignedRM(t.amountSen, t.type);
+  const amountClass = isTransfer ? '' : isIncome ? 'in-text' : 'out-text';
   return `<li class="tx"><button type="button" class="tx-btn" data-action="edit-tx" data-id="${escapeHtml(t.id)}">
-    <span class="tx-icon ${isIncome ? 'in' : ''}" aria-hidden="true">${cat.icon}</span>
+    <span class="tx-icon ${isIncome ? 'in' : ''}" aria-hidden="true">${icon}</span>
     <span class="tx-main">
       <span class="tx-desc" style="display:block">${escapeHtml(t.description)}</span>
-      <span class="tx-cat"><span class="label">${cat.label}</span><span class="tag">${PAYMENT_METHODS[t.paymentMethod]}</span></span>
+      <span class="tx-cat"><span class="label">${label}</span><span class="tag">${tag}</span></span>
     </span>
     <span class="tx-side">
-      <span class="tx-amt ${isIncome ? 'in-text' : 'out-text'}" style="display:block">${formatSignedRM(t.amountSen, t.type)}</span>
+      <span class="tx-amt ${amountClass}" style="display:block">${amount}</span>
       ${showDate ? `<span class="tx-date" style="display:block">${formatDate(t.date)}</span>` : ''}
     </span>
   </button></li>`;
@@ -735,7 +837,10 @@ function renderHome() {
   const key = monthKeyFromDate(today);
   const txs = currentTxs();
   const s = getMonthlySummary(txs, key);
-  const bal = splitRM(getAvailableBalance(currentOpening(), txs));
+  const balances = getAccountBalances(currentOpening(), txs);
+  const bal = splitRM(sumBalances(balances));
+  const accountCells = visibleAccounts(balances).map(k =>
+    `<div><span>${ACCOUNT_LABELS[k]}</span><strong class="${balances[k] < 0 ? 'neg' : ''}">${formatPlain(balances[k])}</strong></div>`).join('');
   const series = getMonthlyExpenseSeries(txs, 6, today);
   const max = Math.max(...series.map(p => p.totalSen), 1);
   const savingsPos = s.savingsSen >= 0;
@@ -757,6 +862,12 @@ function renderHome() {
       <p>Nothing here is saved. When you’re ready, set up HazMoney with your own balance.</p>
       <div class="actions"><button type="button" class="primary" data-action="go-setup">Start using HazMoney</button></div>
     </section>`;
+  } else if (app.data.openingNeedsReview) {
+    banner = `<section class="panel notice">
+      <h2>Split your opening balance</h2>
+      <p>HazMoney now tracks Maybank, Touch ’n Go and Cash separately. Your earlier opening balance of ${formatRM(app.data.openingBalances.maybank)} was put in Maybank for now.</p>
+      <div class="actions"><a class="primary" href="#settings" style="text-decoration:none">Set balances in Settings</a></div>
+    </section>`;
   } else if (needsBackup()) {
     const msg = app.data.lastBackupAt
       ? `Your last backup was ${daysSince(app.data.lastBackupAt)} days ago, and you’ve made changes since.`
@@ -777,6 +888,7 @@ function renderHome() {
       <svg class="rosette" viewBox="0 0 360 200" preserveAspectRatio="xMaxYMin slice" aria-hidden="true">${ROSETTE}</svg>
       <p class="note-label">Total available balance</p>
       <p class="note-amount"><span class="cur">${bal.negative ? '−' : ''}RM</span><span class="whole">${bal.whole}</span><span class="cents">.${bal.cents}</span></p>
+      <div class="note-accounts">${accountCells}</div>
       <div class="note-foot">
         <span>Saved this month</span>
         <strong class="${savingsPos ? 'pos' : 'neg'}">${savingsPos ? '+' : ''}${formatRM(s.savingsSen)}</strong>
@@ -801,10 +913,13 @@ function renderHome() {
 
 function renderTransactions() {
   const key = app.txMonth;
+  const acc = app.txAccount;
   const curKey = monthKeyFromDate(new Date());
   const all = currentTxs();
-  const list = sortTx(all.filter(t => monthKeyOf(t.date) === key));
-  const s = getMonthlySummary(all, key);
+  const scoped = acc === 'all' ? all : all.filter(t => txTouchesAccount(t, acc));
+  const list = sortTx(scoped.filter(t => monthKeyOf(t.date) === key));
+  const s = getMonthlySummary(acc === 'all' ? all : all.filter(t => t.paymentMethod === acc), key);
+  const balances = getAccountBalances(currentOpening(), all);
 
   const groups = [];
   for (const t of list) {
@@ -813,15 +928,20 @@ function renderTransactions() {
     else groups.push({ date: t.date, items: [t] });
   }
 
+  const filters = ['all', ...visibleAccounts(balances)].map(k =>
+    `<button type="button" class="chip" data-action="filter-account" data-acc="${k}" aria-pressed="${k === acc}">${k === 'all' ? 'All' : ACCOUNT_LABELS[k]}</button>`).join('');
+
   const body = groups.length
     ? groups.map(g => {
-        const net = g.items.reduce((acc, t) => acc + (t.type === 'income' ? t.amountSen : -t.amountSen), 0);
+        const net = g.items.reduce((sum, t) => sum + (acc === 'all'
+          ? (t.type === 'income' ? t.amountSen : t.type === 'expense' ? -t.amountSen : 0)
+          : txEffectOn(t, acc)), 0);
         return `<section class="panel day">
           <div class="day-head"><span>${dayLabel(g.date)}</span><span>${net >= 0 ? '+' : ''}${formatRM(net)}</span></div>
           <ul class="txlist">${g.items.map(t => txRow(t, { showDate: false })).join('')}</ul>
         </section>`;
       }).join('')
-    : `<section class="panel"><p class="empty"><span class="big" aria-hidden="true">🧾</span>No transactions in ${monthLong(key)}.${key === curKey ? ' Tap + to add one.' : ''}</p></section>`;
+    : `<section class="panel"><p class="empty"><span class="big" aria-hidden="true">🧾</span>No transactions in ${monthLong(key)}${acc === 'all' ? '' : ` for ${ACCOUNT_LABELS[acc]}`}.${key === curKey ? ' Tap + to add one.' : ''}</p></section>`;
 
   return `
     <header class="top"><div><h1>Transactions</h1></div>${app.mode === 'sample' ? '<span class="pill">Sample data</span>' : ''}</header>
@@ -830,6 +950,8 @@ function renderTransactions() {
       <strong>${monthLong(key)}</strong>
       <button type="button" data-action="month-next" aria-label="Next month" ${key >= curKey ? 'disabled' : ''}>›</button>
     </div>
+    <div class="chips" role="group" aria-label="Filter by account">${filters}</div>
+    ${acc === 'all' ? '' : `<p class="sub" style="padding:0 2px">Current ${ACCOUNT_LABELS[acc]} balance: <strong style="color:var(--ink)">${formatRM(balances[acc])}</strong></p>`}
     <div class="stats">
       <div class="stat"><span class="stat-label"><span class="arrow in" aria-hidden="true">↓</span>Income</span><strong class="in-text">${formatRM(s.incomeSen)}</strong></div>
       <div class="stat"><span class="stat-label"><span class="arrow out" aria-hidden="true">↑</span>Expenses</span><strong class="out-text">${formatRM(s.expensesSen)}</strong></div>
@@ -842,6 +964,33 @@ function renderPlaceholder(title, icon, message) {
   return `
     <header class="top"><div><h1>${title}</h1></div></header>
     <section class="panel"><p class="empty"><span class="big" aria-hidden="true">${icon}</span>${message}</p></section>`;
+}
+
+function openingFields(prefix, values) {
+  return MAIN_ACCOUNTS.map(k => `
+    <label class="field">
+      <span class="field-label">${ACCOUNT_LABELS[k]}</span>
+      <div class="amount-wrap small" id="${prefix}-wrap-${k}"><span class="cur">RM</span><input id="${prefix}-${k}" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${values ? senToInput(Math.max(0, values[k])) : ''}"></div>
+      <span class="err" id="${prefix}-err-${k}"></span>
+    </label>`).join('');
+}
+// Reads the three opening balance fields. Blank means RM 0.00.
+function readOpeningFields(prefix) {
+  const result = {};
+  let ok = true;
+  for (const k of MAIN_ACCOUNTS) {
+    const input = document.getElementById(`${prefix}-${k}`);
+    const err = document.getElementById(`${prefix}-err-${k}`);
+    const wrap = document.getElementById(`${prefix}-wrap-${k}`);
+    const sen = parseAmountToSen(input.value.trim() === '' ? '0' : input.value);
+    let msg = '';
+    if (sen === null) msg = 'Enter an amount like 2500.00.';
+    else if (sen > MAX_BALANCE_SEN) msg = 'That amount is over RM 10,000,000. Check for an extra zero.';
+    err.textContent = msg;
+    wrap.classList.toggle('invalid', !!msg);
+    if (msg) ok = false; else result[k] = sen;
+  }
+  return ok ? result : null;
 }
 
 function renderSettings() {
@@ -881,13 +1030,10 @@ function renderSettings() {
 
     <section class="panel">
       <form id="openingForm" novalidate>
-        <label class="field">
-          <span class="field-label">Opening balance</span>
-          <div class="amount-wrap" id="openingWrap"><span class="cur">RM</span><input id="openingInput" inputmode="decimal" autocomplete="off" value="${senToInput(Math.max(0, d.openingBalanceSen))}"></div>
-          <span class="err" id="openingErr"></span>
-          <span class="help" style="display:block">Your money before your first transaction in HazMoney.</span>
-        </label>
-        <div class="actions"><button type="submit" class="secondary">Save opening balance</button></div>
+        <h2>Opening balances</h2>
+        <p class="sub" style="margin-bottom:14px">How much was in each account before your first transaction in HazMoney.</p>
+        ${openingFields('opening', d.openingBalances)}
+        <div class="actions"><button type="submit" class="secondary">Save opening balances</button></div>
       </form>
     </section>
 
@@ -908,12 +1054,9 @@ function renderSetup() {
     </section>
     <section class="panel">
       <form id="setupForm" novalidate>
-        <label class="field">
-          <span class="field-label">How much money do you have right now?</span>
-          <div class="amount-wrap" id="setupWrap"><span class="cur">RM</span><input id="setupInput" inputmode="decimal" autocomplete="off" placeholder="0.00"></div>
-          <span class="err" id="setupErr"></span>
-          <span class="help" style="display:block">Add up Maybank, Touch ’n Go and cash. You can change this later in Settings.</span>
-        </label>
+        <h2>How much do you have right now?</h2>
+        <p class="sub" style="margin-bottom:14px">Check each account and enter today’s balance. Leave it empty if it’s zero. You can change these later in Settings.</p>
+        ${openingFields('setup', null)}
         <div class="actions"><button type="submit" class="primary">Start using HazMoney</button></div>
       </form>
     </section>
@@ -994,12 +1137,22 @@ function openTxSheet(existing) {
     toast('Sample data can’t be changed. Start using HazMoney first.');
     return;
   }
+  const last = app.data.prefs.lastMethod;
   const draft = existing
-    ? { ...existing, amountText: senToInput(existing.amountSen) }
-    : { type: 'expense', amountText: '', description: '', category: 'other', paymentMethod: app.data.prefs.lastMethod, date: todayISO() };
+    ? { ...existing, amountText: senToInput(existing.amountSen), toMethod: existing.toMethod || (existing.paymentMethod === 'tng' ? 'maybank' : 'tng') }
+    : { type: 'expense', amountText: '', description: '', category: 'other', paymentMethod: last, toMethod: last === 'tng' ? 'maybank' : 'tng', date: todayISO() };
   hideToast();
   app.sheet = { draft, isEdit: !!existing, id: existing ? existing.id : null, categoryTouched: !!existing, pickedManually: false, suggestion: null };
   renderSheet();
+}
+
+function accountOptions(d) {
+  const used = [d.paymentMethod, d.toMethod];
+  return used.includes('other') ? [...MAIN_ACCOUNTS, 'other'] : MAIN_ACCOUNTS;
+}
+function accountButtons(d, attr, selected) {
+  return accountOptions(d).map(k =>
+    `<button type="button" ${attr}="${k}" aria-pressed="${k === selected}">${ACCOUNT_LABELS[k]}</button>`).join('');
 }
 
 function chipHtml(selected) {
@@ -1011,8 +1164,7 @@ function renderSheet() {
   const s = app.sheet;
   const d = s.draft;
   const root = document.getElementById('sheet-root');
-  const methods = Object.entries(PAYMENT_METHODS).map(([key, label]) =>
-    `<button type="button" data-method="${key}" aria-pressed="${key === d.paymentMethod}">${label}</button>`).join('');
+  const amountClass = t => t === 'income' ? 'in' : t === 'expense' ? 'out' : 'tr';
 
   root.innerHTML = `
     <div class="scrim" data-action="close-sheet"></div>
@@ -1027,32 +1179,45 @@ function renderSheet() {
       <div class="seg type-seg" role="group" aria-label="Transaction type">
         <button type="button" data-type="expense" aria-pressed="${d.type === 'expense'}">Expense</button>
         <button type="button" data-type="income" aria-pressed="${d.type === 'income'}">Income</button>
+        <button type="button" data-type="transfer" aria-pressed="${d.type === 'transfer'}">Transfer</button>
       </div>
 
       <label class="field" style="margin-top:16px">
         <span class="field-label">Amount</span>
-        <div class="amount-wrap ${d.type === 'income' ? 'in' : 'out'}" id="amountWrap">
+        <div class="amount-wrap ${amountClass(d.type)}" id="amountWrap">
           <span class="cur">RM</span>
           <input id="fAmount" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${escapeHtml(d.amountText)}" aria-describedby="errAmount">
         </div>
         <span class="err" id="errAmount"></span>
       </label>
 
+      <div class="field" id="accountField">
+        <span class="field-label" id="methodLabel">${d.type === 'income' ? 'Received in' : 'Paid with'}</span>
+        <div class="seg" id="methodSeg" role="group" aria-labelledby="methodLabel">${accountButtons(d, 'data-method', d.paymentMethod)}</div>
+      </div>
+
+      <div id="transferFields">
+        <div class="field">
+          <span class="field-label" id="fromLabel">From</span>
+          <div class="seg" id="fromSeg" role="group" aria-labelledby="fromLabel">${accountButtons(d, 'data-from', d.paymentMethod)}</div>
+        </div>
+        <div class="field">
+          <span class="field-label" id="toLabel">To</span>
+          <div class="seg" id="toSeg" role="group" aria-labelledby="toLabel">${accountButtons(d, 'data-to', d.toMethod)}</div>
+          <span class="err" id="errTo"></span>
+        </div>
+      </div>
+
       <label class="field">
-        <span class="field-label">Description</span>
-        <input class="input" id="fDesc" maxlength="${MAX_DESC}" autocomplete="off" autocapitalize="sentences" placeholder="e.g. Petronas petrol" value="${escapeHtml(d.description)}" aria-describedby="errDesc">
+        <span class="field-label"><span>Description</span><span class="hint" id="descHint"></span></span>
+        <input class="input" id="fDesc" maxlength="${MAX_DESC}" autocomplete="off" autocapitalize="sentences" value="${escapeHtml(d.description)}" aria-describedby="errDesc">
         <span class="err" id="errDesc"></span>
       </label>
 
-      <div class="field">
+      <div class="field" id="categoryField">
         <span class="field-label"><span>Category</span><span class="hint" id="catHint"></span></span>
         <div class="chips" id="catChips" role="group" aria-label="Category">${chipHtml(d.category)}</div>
         <span class="err" id="errCat"></span>
-      </div>
-
-      <div class="field">
-        <span class="field-label" id="methodLabel">${d.type === 'income' ? 'Received in' : 'Paid with'}</span>
-        <div class="seg methods" id="methodSeg" role="group" aria-labelledby="methodLabel">${methods}</div>
       </div>
 
       <label class="field">
@@ -1074,14 +1239,53 @@ function renderSheet() {
   const desc = document.getElementById('fDesc');
   const date = document.getElementById('fDate');
 
-  // Type toggle
+  const pressOnly = (selector, attr, value) =>
+    form.querySelectorAll(selector).forEach(b => b.setAttribute('aria-pressed', String(b.getAttribute(attr) === value)));
+
+  // Shows the right fields for expense, income or transfer.
+  const syncType = () => {
+    const isTransfer = d.type === 'transfer';
+    form.querySelectorAll('[data-type]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.type === d.type)));
+    document.getElementById('amountWrap').className = `amount-wrap ${amountClass(d.type)}`;
+    document.getElementById('accountField').hidden = isTransfer;
+    document.getElementById('transferFields').hidden = !isTransfer;
+    document.getElementById('categoryField').hidden = isTransfer;
+    document.getElementById('methodLabel').textContent = d.type === 'income' ? 'Received in' : 'Paid with';
+    desc.placeholder = isTransfer ? 'e.g. Top up Touch ’n Go' : 'e.g. Petronas petrol';
+    document.getElementById('descHint').textContent = isTransfer ? 'Optional' : '';
+    pressOnly('[data-method]', 'data-method', d.paymentMethod);
+    pressOnly('[data-from]', 'data-from', d.paymentMethod);
+    pressOnly('[data-to]', 'data-to', d.toMethod);
+  };
+
   form.querySelectorAll('[data-type]').forEach(btn => btn.addEventListener('click', () => {
     d.type = btn.dataset.type;
-    form.querySelectorAll('[data-type]').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
-    document.getElementById('amountWrap').className = `amount-wrap ${d.type === 'income' ? 'in' : 'out'}`;
-    document.getElementById('methodLabel').textContent = d.type === 'income' ? 'Received in' : 'Paid with';
+    if (d.type === 'transfer' && d.toMethod === d.paymentMethod) {
+      d.toMethod = MAIN_ACCOUNTS.find(k => k !== d.paymentMethod);
+    }
+    syncType();
+    clearErr('errTo');
     applySuggestion();
   }));
+
+  form.querySelector('#methodSeg').addEventListener('click', e => {
+    const btn = e.target.closest('[data-method]');
+    if (btn) { d.paymentMethod = btn.dataset.method; syncType(); }
+  });
+  form.querySelector('#fromSeg').addEventListener('click', e => {
+    const btn = e.target.closest('[data-from]');
+    if (!btn) return;
+    d.paymentMethod = btn.dataset.from;
+    if (d.toMethod === d.paymentMethod) d.toMethod = MAIN_ACCOUNTS.find(k => k !== d.paymentMethod);
+    syncType(); clearErr('errTo');
+  });
+  form.querySelector('#toSeg').addEventListener('click', e => {
+    const btn = e.target.closest('[data-to]');
+    if (!btn) return;
+    d.toMethod = btn.dataset.to;
+    if (d.toMethod === d.paymentMethod) d.paymentMethod = MAIN_ACCOUNTS.find(k => k !== d.toMethod);
+    syncType(); clearErr('errTo');
+  });
 
   amount.addEventListener('input', () => { d.amountText = amount.value; clearErr('errAmount', 'amountWrap'); });
   amount.addEventListener('blur', () => {
@@ -1102,13 +1306,6 @@ function renderSheet() {
     clearErr('errCat');
   });
 
-  form.querySelector('#methodSeg').addEventListener('click', e => {
-    const btn = e.target.closest('[data-method]');
-    if (!btn) return;
-    d.paymentMethod = btn.dataset.method;
-    form.querySelectorAll('[data-method]').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
-  });
-
   date.addEventListener('change', () => {
     d.date = date.value;
     document.getElementById('dateLabel').textContent = isValidISODate(d.date) ? formatDate(d.date) : 'Choose a date';
@@ -1117,6 +1314,7 @@ function renderSheet() {
 
   form.addEventListener('submit', e => { e.preventDefault(); saveSheet(); });
 
+  syncType();
   if (!s.isEdit) setTimeout(() => amount.focus(), 50);
 }
 
@@ -1128,7 +1326,7 @@ function updateChips() {
 // Picks a category from the description, unless the user already chose one.
 function applySuggestion() {
   const s = app.sheet;
-  if (s.categoryTouched) return;
+  if (s.categoryTouched || s.draft.type === 'transfer') return;
   const hint = document.getElementById('catHint');
   const sug = suggestCategory(s.draft.description, s.draft.type);
   s.suggestion = sug;
@@ -1150,6 +1348,7 @@ function showErrors(errors) {
   set('errDesc', errors.description);
   if (errors.description) document.getElementById('fDesc').setAttribute('aria-invalid', 'true');
   set('errCat', errors.category);
+  set('errTo', errors.toMethod);
   set('errDate', errors.date); document.getElementById('dateWrap').classList.toggle('invalid', !!errors.date);
   const first = errors.amount ? 'fAmount' : errors.description ? 'fDesc' : null;
   if (first) document.getElementById(first).focus();
@@ -1175,9 +1374,9 @@ function saveSheet() {
     } else {
       d.transactions.push({ id: newId(), ...value, createdAt: now, updatedAt: now });
     }
-    d.prefs.lastMethod = value.paymentMethod;
+    if (value.type !== 'transfer') d.prefs.lastMethod = value.paymentMethod;
     // Remember categories the user picked by hand, for next time.
-    if (s.pickedManually && learnKey) {
+    if (value.type !== 'transfer' && s.pickedManually && learnKey) {
       const rule = suggestCategory(value.description, value.type);
       if (!rule || rule.category !== value.category) d.learnedCategories[learnKey] = value.category;
       const keys = Object.keys(d.learnedCategories);
@@ -1187,7 +1386,7 @@ function saveSheet() {
   if (!ok) return;
   closeSheet();
   rerender();
-  toast(s.isEdit ? 'Changes saved' : 'Transaction added');
+  toast(s.isEdit ? 'Changes saved' : value.type === 'transfer' ? 'Transfer added' : 'Transaction added');
 }
 
 function deleteFromSheet() {
@@ -1408,7 +1607,7 @@ function saveImport() {
     for (const it of chosen) {
       d.transactions.push({
         id: newId(), type: 'expense', amountSen: it.amountSen, description: it.merchant,
-        category: it.category, paymentMethod: 'maybank', date: it.date, createdAt: now, updatedAt: now,
+        category: it.category, paymentMethod: 'maybank', toMethod: null, date: it.date, createdAt: now, updatedAt: now,
       });
       if (it.category !== it.suggested) {
         const k = normalizeText(it.merchant).trim();
@@ -1446,6 +1645,9 @@ document.addEventListener('click', e => {
       if (next <= monthKeyFromDate(new Date())) { app.txMonth = next; rerender(); }
       break;
     }
+    case 'filter-account':
+      if (el.dataset.acc === 'all' || has(PAYMENT_METHODS, el.dataset.acc)) { app.txAccount = el.dataset.acc; rerender(); }
+      break;
     case 'backup': exportBackup(); break;
     case 'restore': startRestore(); break;
     case 'import-applepay': {
@@ -1481,13 +1683,9 @@ document.addEventListener('click', e => {
 document.addEventListener('submit', e => {
   if (e.target.id === 'setupForm') {
     e.preventDefault();
-    const input = document.getElementById('setupInput');
-    const raw = input.value.trim() === '' ? '0' : input.value;
-    const sen = parseAmountToSen(raw);
-    const err = document.getElementById('setupErr');
-    if (sen === null) { err.textContent = 'Enter an amount like 2500.00.'; document.getElementById('setupWrap').classList.add('invalid'); return; }
-    if (sen > MAX_BALANCE_SEN) { err.textContent = 'That amount is over RM 10,000,000. Check for an extra zero.'; document.getElementById('setupWrap').classList.add('invalid'); return; }
-    const data = newData(sen);
+    const openings = readOpeningFields('setup');
+    if (!openings) return;
+    const data = newData(openings);
     if (!persist(data)) return;
     app.data = data;
     app.mode = 'live';
@@ -1498,12 +1696,12 @@ document.addEventListener('submit', e => {
   }
   if (e.target.id === 'openingForm') {
     e.preventDefault();
-    const sen = parseAmountToSen(document.getElementById('openingInput').value);
-    const err = document.getElementById('openingErr');
-    const wrap = document.getElementById('openingWrap');
-    if (sen === null) { err.textContent = 'Enter an amount like 2500.00.'; wrap.classList.add('invalid'); return; }
-    if (sen > MAX_BALANCE_SEN) { err.textContent = 'That amount is over RM 10,000,000. Check for an extra zero.'; wrap.classList.add('invalid'); return; }
-    if (commit(d => { d.openingBalanceSen = sen; })) { rerender(); toast('Opening balance saved'); }
+    const openings = readOpeningFields('opening');
+    if (!openings) return;
+    if (commit(d => { d.openingBalances = { ...d.openingBalances, ...openings }; d.openingNeedsReview = false; })) {
+      rerender();
+      toast('Opening balances saved');
+    }
   }
 });
 
