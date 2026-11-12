@@ -276,6 +276,17 @@ body.no-tabs .tabbar { display: none; }
 .toast button { color: var(--note-pos); font-weight: 700; min-height: 32px; }
 @media (prefers-color-scheme: dark) { .toast button { color: var(--jade); filter: brightness(0.7); } }
 
+/* Apple Pay import */
+.imp { display: flex; gap: 12px; align-items: flex-start; padding: 12px 0; }
+.imp + .imp { border-top: 1px solid var(--line); }
+.imp input[type="checkbox"] { width: 24px; height: 24px; margin-top: 2px; accent-color: var(--jade); flex: none; }
+.imp-main { flex: 1; min-width: 0; }
+.imp.off .imp-main, .imp.off .tx-amt { opacity: 0.4; }
+.sel { position: relative; display: block; margin-top: 8px; }
+.sel::after { content: "▾"; position: absolute; right: 12px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+.sel select { width: 100%; min-height: 42px; padding: 8px 32px 8px 12px; border-radius: 12px; background: var(--field); border: 1px solid var(--line); font-size: 15px; -webkit-appearance: none; appearance: none; }
+.import-note { color: var(--muted); font-size: 14px; margin-bottom: 8px; }
+
 /* Setup */
 .setup { padding-top: 8vh; }
 .setup .brand { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; }
@@ -308,6 +319,7 @@ body.no-tabs .tabbar { display: none; }
 <div id="sheet-root"></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <input type="file" id="restoreInput" accept=".json,application/json" hidden>
+<input type="file" id="applepayInput" accept=".txt,text/plain" hidden>
 
 <script>
 'use strict';
@@ -324,6 +336,7 @@ const MAX_DESC = 80;
 const MAX_TX_COUNT = 100000;
 const MAX_LEARNED = 500;
 const BACKUP_REMINDER_DAYS = 7;
+const MAX_IMPORTED_KEYS = 5000;
 
 const CATEGORIES = {
   food:          { label: 'Food & Drinks',           icon: '🍜' },
@@ -515,6 +528,9 @@ function cleanData(d) {
     prefs: { lastMethod },
     lastBackupAt: isIsoTimestamp(d.lastBackupAt) ? d.lastBackupAt : null,
     lastChangeAt: isIsoTimestamp(d.lastChangeAt) ? d.lastChangeAt : null,
+    importedKeys: Array.isArray(d.importedKeys)
+      ? d.importedKeys.filter(k => typeof k === 'string' && k.length <= 320).slice(-MAX_IMPORTED_KEYS)
+      : [],
   };
 }
 
@@ -552,7 +568,7 @@ function newData(openingBalanceSen) {
   return {
     schemaVersion: SCHEMA_VERSION, openingBalanceSen, transactions: [],
     learnedCategories: {}, prefs: { lastMethod: 'maybank' },
-    lastBackupAt: null, lastChangeAt: new Date().toISOString(),
+    lastBackupAt: null, lastChangeAt: new Date().toISOString(), importedKeys: [],
   };
 }
 
@@ -760,7 +776,7 @@ function renderHome() {
     <section class="note" aria-label="Total available balance">
       <svg class="rosette" viewBox="0 0 360 200" preserveAspectRatio="xMaxYMin slice" aria-hidden="true">${ROSETTE}</svg>
       <p class="note-label">Total available balance</p>
-      <p class="note-amount"><span class="cur">RM</span><span class="whole">${bal.negative ? '−' : ''}${bal.whole}</span><span class="cents">.${bal.cents}</span></p>
+      <p class="note-amount"><span class="cur">${bal.negative ? '−' : ''}RM</span><span class="whole">${bal.whole}</span><span class="cents">.${bal.cents}</span></p>
       <div class="note-foot">
         <span>Saved this month</span>
         <strong class="${savingsPos ? 'pos' : 'neg'}">${savingsPos ? '+' : ''}${formatRM(s.savingsSen)}</strong>
@@ -818,7 +834,8 @@ function renderTransactions() {
       <div class="stat"><span class="stat-label"><span class="arrow in" aria-hidden="true">↓</span>Income</span><strong class="in-text">${formatRM(s.incomeSen)}</strong></div>
       <div class="stat"><span class="stat-label"><span class="arrow out" aria-hidden="true">↑</span>Expenses</span><strong class="out-text">${formatRM(s.expensesSen)}</strong></div>
     </div>
-    ${body}`;
+    ${body}
+    ${app.mode === 'live' ? '<button type="button" class="secondary" data-action="import-applepay">Import Apple Pay purchases</button>' : ''}`;
 }
 
 function renderPlaceholder(title, icon, message) {
@@ -854,6 +871,12 @@ function renderSettings() {
         <button type="button" class="primary" data-action="backup">Back up now</button>
         <button type="button" class="secondary" data-action="restore">Restore from a backup</button>
       </div>
+    </section>
+
+    <section class="panel">
+      <h2>Apple Pay purchases</h2>
+      <p class="sub">Add purchases that your iPhone logged with the HazMoney shortcut. Purchases you’ve already imported are skipped.</p>
+      <div class="actions"><button type="button" class="secondary" data-action="import-applepay">Import Apple Pay purchases</button></div>
     </section>
 
     <section class="panel">
@@ -1185,6 +1208,7 @@ function deleteFromSheet() {
 
 function closeSheet() {
   app.sheet = null;
+  app.importItems = null;
   document.getElementById('sheet-root').innerHTML = '';
   document.body.classList.remove('sheet-open');
 }
@@ -1262,6 +1286,145 @@ document.getElementById('restoreInput').addEventListener('change', async e => {
 });
 
 /* =========================================================
+   Apple Pay import
+   Each line in the log file looks like:
+   HZ|2026-11-12 13:45|RM12.50|Petronas Setia Alam|Maybank Visa
+   ========================================================= */
+function parseLogDate(s) {
+  let m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (m) { const iso = `${m[1]}-${m[2]}-${m[3]}`; return isValidISODate(iso) ? iso : null; }
+  m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(s);
+  if (m) { const iso = `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`; return isValidISODate(iso) ? iso : null; }
+  return null;
+}
+function parseApplePayLine(line) {
+  const raw = line.trim();
+  if (!raw) return null;
+  const parts = raw.split('|').map(x => x.trim());
+  if (parts[0].toUpperCase() === 'HZ') parts.shift();
+  if (parts.length < 2) return { error: true };
+  const [when, amountRaw, merchantRaw = ''] = parts;
+  const date = parseLogDate(when);
+  const amountSen = parseAmountToSen(String(amountRaw).replace(/[^\d.,]/g, '').replace(/,/g, ''));
+  if (!date || amountSen === null || amountSen <= 0 || amountSen > MAX_TX_SEN) return { error: true };
+  const merchant = merchantRaw.replace(/\s+/g, ' ').trim().slice(0, MAX_DESC) || 'Apple Pay purchase';
+  return { baseKey: normalizeText(raw).trim().slice(0, 300), date, amountSen, merchant };
+}
+
+document.getElementById('applepayInput').addEventListener('change', async e => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  if (app.mode !== 'live') { toast('Start using HazMoney first, then import.'); return; }
+  if (file.size > 2 * 1024 * 1024) { toast('That file is too large to be the Apple Pay log.'); return; }
+  let text;
+  try { text = await file.text(); } catch { toast('Couldn’t open that file. Try again.'); return; }
+
+  const seen = new Set(app.data.importedKeys);
+  const counts = new Map();
+  const items = [];
+  let unreadable = 0;
+  for (const line of text.split(/\r?\n/)) {
+    const p = parseApplePayLine(line);
+    if (!p) continue;
+    if (p.error) { unreadable++; continue; }
+    // Number repeats of the same line, so two identical purchases both count.
+    const n = (counts.get(p.baseKey) || 0) + 1;
+    counts.set(p.baseKey, n);
+    const key = `${p.baseKey}#${n}`;
+    if (seen.has(key)) continue;
+    const sug = suggestCategory(p.merchant, 'expense');
+    const category = sug ? sug.category : 'other';
+    items.push({ key, date: p.date, amountSen: p.amountSen, merchant: p.merchant, category, suggested: category, include: true });
+  }
+
+  if (!items.length) {
+    toast(unreadable
+      ? `No new purchases found. ${unreadable} ${unreadable === 1 ? 'line' : 'lines'} couldn’t be read.`
+      : 'No new Apple Pay purchases to add.');
+    return;
+  }
+  items.sort((a, b) => b.date.localeCompare(a.date));
+  app.importItems = items;
+  renderImportSheet(unreadable);
+});
+
+function renderImportSheet(unreadable) {
+  const items = app.importItems;
+  const options = sel => Object.entries(CATEGORIES)
+    .map(([k, c]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${c.icon} ${c.label}</option>`).join('');
+  const rows = items.map((it, i) => `
+    <li class="imp" data-row="${i}">
+      <input type="checkbox" data-inc="${i}" checked aria-label="Include ${escapeHtml(it.merchant)}">
+      <div class="imp-main">
+        <div class="tx-desc">${escapeHtml(it.merchant)}</div>
+        <div class="tx-date">${formatDate(it.date)}</div>
+        <label class="sel"><select data-cat-i="${i}" aria-label="Category for ${escapeHtml(it.merchant)}">${options(it.category)}</select></label>
+      </div>
+      <div class="tx-amt out-text">${formatSignedRM(it.amountSen, 'expense')}</div>
+    </li>`).join('');
+
+  document.getElementById('sheet-root').innerHTML = `
+    <div class="scrim" data-action="close-sheet"></div>
+    <form class="sheet" id="importForm" novalidate role="dialog" aria-modal="true" aria-labelledby="importTitle">
+      <div class="grabber" aria-hidden="true"></div>
+      <div class="sheet-head">
+        <button type="button" class="link" data-action="close-sheet">Cancel</button>
+        <h2 id="importTitle">Apple Pay purchases</h2>
+        <span></span>
+      </div>
+      <p class="import-note">${items.length} new ${items.length === 1 ? 'purchase' : 'purchases'} paid with Maybank. Untick any you don’t want; they won’t appear again.</p>
+      ${unreadable ? `<p class="import-note">${unreadable} ${unreadable === 1 ? 'line' : 'lines'} in the file couldn’t be read and ${unreadable === 1 ? 'was' : 'were'} skipped.</p>` : ''}
+      <ul class="txlist">${rows}</ul>
+      <button type="submit" class="primary" id="importBtn"></button>
+    </form>`;
+  document.body.classList.add('sheet-open');
+  hideToast();
+
+  const form = document.getElementById('importForm');
+  const updateBtn = () => {
+    const n = items.filter(it => it.include).length;
+    const btn = document.getElementById('importBtn');
+    btn.textContent = n ? `Add ${n} ${n === 1 ? 'transaction' : 'transactions'}` : 'Skip all';
+  };
+  form.addEventListener('change', e => {
+    const t = e.target;
+    if (t.dataset.inc !== undefined) {
+      const i = Number(t.dataset.inc);
+      items[i].include = t.checked;
+      form.querySelector(`[data-row="${i}"]`).classList.toggle('off', !t.checked);
+      updateBtn();
+    }
+    if (t.dataset.catI !== undefined && has(CATEGORIES, t.value)) items[Number(t.dataset.catI)].category = t.value;
+  });
+  form.addEventListener('submit', e => { e.preventDefault(); saveImport(); });
+  updateBtn();
+}
+
+function saveImport() {
+  const items = app.importItems;
+  const now = new Date().toISOString();
+  const chosen = items.filter(it => it.include);
+  const ok = commit(d => {
+    for (const it of chosen) {
+      d.transactions.push({
+        id: newId(), type: 'expense', amountSen: it.amountSen, description: it.merchant,
+        category: it.category, paymentMethod: 'maybank', date: it.date, createdAt: now, updatedAt: now,
+      });
+      if (it.category !== it.suggested) {
+        const k = normalizeText(it.merchant).trim();
+        if (k) d.learnedCategories[k] = it.category;
+      }
+    }
+    // Remember every reviewed line, including skipped ones, so they don't come back.
+    d.importedKeys = d.importedKeys.concat(items.map(it => it.key)).slice(-MAX_IMPORTED_KEYS);
+  }, { isChange: chosen.length > 0 });
+  if (!ok) return;
+  closeSheet();
+  rerender();
+  toast(chosen.length ? `Added ${chosen.length} ${chosen.length === 1 ? 'transaction' : 'transactions'}` : 'Purchases skipped');
+}
+
+/* =========================================================
    Click and form handling
    ========================================================= */
 document.addEventListener('click', e => {
@@ -1285,6 +1448,12 @@ document.addEventListener('click', e => {
     }
     case 'backup': exportBackup(); break;
     case 'restore': startRestore(); break;
+    case 'import-applepay': {
+      const input = document.getElementById('applepayInput');
+      input.value = '';
+      input.click();
+      break;
+    }
     case 'explore-sample':
       app.sample = buildSampleData(new Date());
       app.mode = 'sample';
